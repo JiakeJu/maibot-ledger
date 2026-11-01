@@ -1,0 +1,8 @@
+# 插件运行期生成的配置（由宿主 Runner 按配置模型生成）
+/config.toml
+
+# 本地开发与数据缓存
+__pycache__/
+*.pyc
+data/
+.venv/
