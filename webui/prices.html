@@ -1,0 +1,567 @@
+<div class="page maibot-page">
+  <div class="topbar">
+    <div>
+      <div class="title">价格库</div>
+      <div class="hint" id="peak-rule">加载中…</div>
+    </div>
+    <div class="actions">
+      <button class="btn ghost" id="btn-refresh">刷新</button>
+    </div>
+  </div>
+
+  <div class="notice">
+    计价单位可选：<b>元 / 百万 token</b>（默认）、<b>元 / 次</b>（按调用次数计费的服务）。
+    列表 = 最近实际跑过的模型 + 你手动新增的条目；同名同供应商会自动合并。点开二级编辑，留空表示该字段不修改。
+  </div>
+
+  <div class="toolbar">
+    <button class="btn ghost" id="btn-add">＋ 手动新增价格</button>
+    <span class="hint">没有调用记录也能提前建价；单价支持按 token 或按次（call）。</span>
+  </div>
+  <div id="addform" class="addform">
+    <div class="grid">
+      <div><label>服务商</label><input id="add_provider" placeholder="deepseek / siliconflow / 自定义"></div>
+      <div><label>模型标识（必填）</label><input id="add_model" placeholder="例如 whisper-large-v3"></div>
+      <div><label>宿主模型标识 model_id（可选）</label><input id="add_model_id" placeholder="宿主 llm_usage 里的 model_name"></div>
+      <div><label>别名（逗号分隔）</label><input id="add_aliases" placeholder="model-alias-1,model-alias-2"></div>
+      <div><label>计价单位</label><select id="add_unit"><option value="token">元 / 百万 token</option><option value="call">元 / 次</option></select></div>
+      <div><label>单价（按次计费用）</label><input id="add_unit_price" placeholder="例如 0.06"></div>
+      <div><label>输入价（token 用）</label><input id="add_input_price"></div>
+      <div><label>缓存命中输入价</label><input id="add_cache_input_price"></div>
+      <div><label>输出价</label><input id="add_output_price"></div>
+      <div><label>高峰输入价</label><input id="add_peak_input_price"></div>
+      <div><label>高峰缓存命中价</label><input id="add_peak_cache_input_price"></div>
+      <div><label>高峰输出价</label><input id="add_peak_output_price"></div>
+      <div><label>本模型高峰星期（空=跟随全局）</label><input id="add_peak_weekdays" placeholder="如 1-5"></div>
+      <div><label>本模型高峰时段（空=跟随全局）</label><input id="add_peak_windows" placeholder="如 09:00-12:00,14:00-18:00"></div>
+      <div><label>本模型节假日模式（空=跟随全局）</label><select id="add_peak_holiday_mode"><option value=""></option><option value="none">none</option><option value="china">china</option></select></div>
+      <div><label>币种</label><select id="add_currency"><option value="CNY">CNY</option><option value="USD">USD</option></select></div>
+      <div><label>官方来源 URL</label><input id="add_source_url"></div>
+      <div><label>抓取日期</label><input id="add_fetched_at" placeholder="YYYY-MM-DD"></div>
+      <div><label>确认状态</label><select id="add_verified"><option value="false">未确认</option><option value="true">已确认</option></select></div>
+    </div>
+    <div class="foot" style="margin-top:10px">
+      <span class="spacer"></span>
+      <button class="btn primary" id="btn-add-save">新增并应用</button>
+      <button class="btn ghost" id="btn-add-cancel">取消</button>
+    </div>
+  </div>
+  <div id="cards" class="cards"></div>
+
+  <div class="title" style="margin-top:22px">工具调用价（元 / 1000 次）</div>
+  <div class="notice" style="margin-top:6px">
+    按宿主「工具小时统计」里联网检索工具的调用次数 × 你在下方填写的单价，计入「工具费估算」。
+    格式与模型价格一致：服务商 + 工具 + 单价 + 币种 + 官方来源 + 确认状态；未配置单价按 0 计，不猜价。
+  </div>
+  <div id="toolcards" class="cards"></div>
+  <div id="msg" class="msg" role="status" aria-live="polite"></div>
+</div>
+
+<style>
+  /* 跟随宿主主题：颜色/圆角/字体全部取自宿主注入的 --maibot-* 变量，
+     切换「原版 / 未来复古 / 千禧 / 深色」时自动跟随，无需插件自己判断主题。 */
+  :root {
+    color-scheme: light dark;
+    --fg: var(--maibot-foreground, #1f2328);
+    --muted-fg: var(--maibot-muted, #57606a);
+    --bd: var(--maibot-border, rgba(27, 31, 36, 0.18));
+    --card-bg: var(--maibot-surface, #ffffff);
+    --input-bg: var(--maibot-soft, #f5f6f8);
+    --soft-bg: var(--maibot-soft, rgba(27, 31, 36, 0.05));
+    --primary: var(--maibot-primary, #2563eb);
+    --primary-fg: var(--maibot-primary-foreground, #ffffff);
+    --radius: var(--maibot-radius, 8px);
+    --ok: var(--maibot-primary, #15803d);
+    --warn: #b45309;
+    --err: var(--maibot-danger, #b91c1c);
+    --font-body: var(--maibot-font-body, system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif);
+    --font-display: var(--maibot-font-display, var(--font-body));
+  }
+  body { background: transparent; color: var(--fg); }
+  .page {
+    font: 13px/1.55 var(--font-body);
+    color: var(--fg);
+    padding: 4px 2px 24px;
+    border-radius: var(--radius);
+  }
+  .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+  .title { font-size: 15px; font-weight: 600; font-family: var(--font-display); }
+  .hint { margin-top: 2px; color: var(--muted-fg); font-size: 12px; }
+  .notice {
+    background: var(--soft-bg);
+    border: 1px solid var(--bd);
+    border-radius: var(--radius); padding: 8px 10px; color: var(--muted-fg); font-size: 12px; margin-bottom: 12px;
+  }
+  .cards { display: flex; flex-direction: column; gap: 8px; }
+  .card { border: 1px solid var(--bd); border-radius: var(--radius); background: var(--card-bg); overflow: hidden; }
+  .card-head { display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; user-select: none; }
+  .card-head:hover { background: var(--soft-bg); }
+  .chevron { width: 12px; color: var(--muted-fg); transition: transform .15s; transform: rotate(-90deg); }
+  .card.open .chevron { transform: rotate(0deg); }
+  .model { font-weight: 600; }
+  .provider { color: var(--muted-fg); font-size: 12px; }
+  .spacer { flex: 1; }
+  .badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--bd); background: var(--soft-bg); color: var(--muted-fg); }
+  .badge.ok { color: var(--primary); border-color: var(--primary); background: transparent; }
+  .badge.warn { color: var(--warn); border-color: var(--warn); background: transparent; }
+  .badge.err { color: var(--err); border-color: var(--err); background: transparent; }
+  .price-line { color: var(--muted-fg); font-size: 12px; font-variant-numeric: tabular-nums; font-family: var(--font-display); }
+  .card-body { display: none; border-top: 1px solid var(--bd); padding: 12px; }
+  .card.open .card-body { display: block; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr !important; } }
+  .panel { border: 1px solid var(--bd); border-radius: var(--radius); padding: 10px 12px; background: var(--card-bg); }
+  .panel h4 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--fg); }
+  .row { display: grid; grid-template-columns: 1fr 130px; gap: 8px; align-items: center; margin: 6px 0; }
+  .row label { color: var(--muted-fg); font-size: 12px; }
+  .row input, select.sel, .addform input, .addform select {
+    width: 100%; box-sizing: border-box; padding: 6px 8px; font: inherit; font-size: 12px;
+    color: var(--fg); background: var(--input-bg);
+    border: 1px solid var(--bd); border-radius: calc(var(--radius) * 0.75); font-variant-numeric: tabular-nums;
+  }
+  .row input { text-align: right; }
+  .row input:focus-visible, select.sel:focus-visible, .addform input:focus-visible, .addform select:focus-visible {
+    outline: 2px solid var(--primary); outline-offset: 2px;
+  }
+  .foot { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .foot .spacer { flex: 1; }
+  .btn {
+    padding: 6px 12px; font: inherit; font-size: 12px; border-radius: calc(var(--radius) * 0.75);
+    cursor: pointer; border: 1px solid var(--bd); background: var(--card-bg); color: var(--fg);
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn:hover:not(:disabled) { filter: brightness(0.97); }
+  .btn.primary { background: var(--primary); color: var(--primary-fg); border-color: transparent; }
+  .btn.ghost { background: transparent; }
+  .btn.muted { background: var(--soft-bg); }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .msg { margin-top: 10px; font-size: 12px; color: var(--muted-fg); min-height: 18px; }
+  .msg.ok { color: var(--primary); }
+  .msg.err { color: var(--err); }
+  .empty { padding: 24px; text-align: center; color: var(--muted-fg); border: 1px dashed var(--bd); border-radius: var(--radius); }
+  .unit-badge { font-size: 11px; color: var(--muted-fg); border: 1px solid var(--bd); border-radius: 999px; padding: 1px 8px; margin-left: 4px; }
+  .toolbar { display: flex; align-items: center; gap: 10px; margin: 4px 0 10px; }
+  .addform { display: none; border: 1px solid var(--bd); border-radius: var(--radius); background: var(--soft-bg); padding: 12px 14px; margin-bottom: 12px; }
+  .addform.show { display: block; }
+  .addform .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px 16px; }
+  .addform label { display: block; margin-bottom: 3px; font-size: 12px; color: var(--muted-fg); }
+</style>
+
+<script>
+(() => {
+  const api = window.maibot;
+  const cardsEl = document.getElementById('cards');
+  const toolEl = document.getElementById('toolcards');
+  const msgEl = document.getElementById('msg');
+  const peakEl = document.getElementById('peak-rule');
+  let rows = [];
+  let toolRows = [];
+  let open = new Set();
+  const toolOpen = new Set();
+
+  function esc(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[ch]);
+  }
+  function num(value) {
+    const text = String(value == null ? '' : value);
+    return text === '' ? '' : text;
+  }
+  function say(text, kind) {
+    msgEl.textContent = text || '';
+    msgEl.className = 'msg' + (kind ? ' ' + kind : '');
+  }
+  function badge(status) {
+    const text = String(status || '');
+    const cls = text.indexOf('已确认') >= 0 ? 'ok' : ((text.indexOf('未识别') >= 0 || text.indexOf('待补价') >= 0) ? 'err' : 'warn');
+    return '<span class="badge ' + cls + '">' + esc(text || '待确认') + '</span>';
+  }
+  function priceLine(row) {
+    const parts = [];
+    if (num(row.input) !== '') parts.push('输入 ' + esc(row.input));
+    if (num(row.cache_input) !== '') parts.push('缓存 ' + esc(row.cache_input));
+    if (num(row.output) !== '') parts.push('输出 ' + esc(row.output));
+    const peakIn = Number(row.peak_input || 0);
+    const peakCache = Number(row.peak_cache_input || 0);
+    const peakOut = Number(row.peak_output || 0);
+    if (peakIn > 0 || peakCache > 0 || peakOut > 0) {
+      parts.push('峰 ' + esc(peakIn) + '/' + esc(peakCache) + '/' + esc(peakOut));
+    }
+    parts.push('币种 ' + esc(row.currency || 'CNY'));
+    if (row.requests) parts.push('调用 ' + esc(row.requests) + ' 次');
+    return parts.join(' · ');
+  }
+  function field(id, label, value) {
+    return '<div class="row"><label for="' + id + '">' + esc(label) + '</label>' +
+      '<input id="' + id + '" data-field="' + id + '" inputmode="decimal" value="' + esc(value == null ? '' : value) + '"></div>';
+  }
+  function unitLabel(unit) {
+    return unit === 'call' ? '元 / 次' : '元 / 百万 token';
+  }
+  function syncUnit(index) {
+    const select = document.getElementById('unit_' + index);
+    const panels = document.getElementById('token_panels_' + index);
+    if (!select || !panels) return;
+    panels.style.display = select.value === 'token' ? '' : 'none';
+  }
+  function cardHtml(row, index) {
+    const key = String(row.provider || '') + '|' + String(row.model || '');
+    const peakInput = num(row.peak_input);
+    const peakOut = num(row.peak_output);
+    return '<section class="card' + (open.has(key) ? ' open' : '') + '" data-key="' + esc(key) + '" data-index="' + index + '">' +
+      '<div class="card-head" data-toggle="' + index + '">' +
+        '<span class="chevron">▾</span>' +
+        '<span class="model">' + esc(row.model || '（未命名模型）') + '</span>' +
+        '<span class="provider">' + esc(row.provider || '') + '</span>' +
+        '<span class="spacer"></span>' +
+        '<span class="price-line">' + priceLine(row) + '</span>' +
+        '<span class="unit-badge">' + unitLabel(row.unit) + '</span>' +
+        badge(row.status) +
+      '</div>' +
+      '<div class="card-body">' +
+        '<div class="grid2" style="grid-template-columns:1fr 1fr 1fr">' +
+          '<div class="panel"><h4>计价单位</h4>' +
+            '<select class="sel" id="unit_' + index + '">' +
+              '<option value="token"' + ((row.unit || 'token') === 'token' ? ' selected' : '') + '>元 / 百万 token</option>' +
+              '<option value="call"' + (row.unit === 'call' ? ' selected' : '') + '>元 / 次</option>' +
+            '</select>' +
+            field('unit_price_' + index, '单价（元 / 次）', num(row.unit_price)) +
+            '<div class="hint">选「元 / 次」时按调用次数 × 单价计费。</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="grid2" id="token_panels_' + index + '">' +
+          '<div class="panel"><h4>常规报价（元 / 百万 token）</h4>' +
+            field('input_price_' + index, '输入价', num(row.input)) +
+            field('cache_input_price_' + index, '缓存命中输入价', num(row.cache_input)) +
+            field('output_price_' + index, '输出价', num(row.output)) +
+            field('source_url_' + index, '官方来源 URL', row.source || '') +
+            '<div class="hint">抓取时间：' + esc(row.fetched_at || '—') + '</div>' +
+          '</div>' +
+          '<div class="panel"><h4>峰谷报价（元 / 百万 token，0=无峰谷差异）</h4>' +
+            field('peak_input_price_' + index, '高峰输入价', peakInput) +
+            field('peak_cache_input_price_' + index, '高峰缓存命中输入价', num(row.peak_cache_input)) +
+            field('peak_output_price_' + index, '高峰输出价', peakOut) +
+            '<div class="hint">当前高峰输入 ' + esc(peakInput || '0') + ' / 高峰输出 ' + esc(peakOut || '0') + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="panel"><h4>本模型峰谷时段（留空=跟随全局「峰谷时段」；填 “-” 可清除）</h4>' +
+          '<div class="grid2">' +
+            field('peak_weekdays_' + index, '高峰星期（如 1-5）', row.peak_weekdays || '') +
+            field('peak_windows_' + index, '高峰时段（如 09:00-12:00,14:00-18:00）', row.peak_windows || '') +
+          '</div>' +
+          '<div class="grid2">' +
+            '<div><label>节假日模式（空=跟随全局）</label><select class="sel" id="peak_holiday_mode_' + index + '">' +
+              '<option value=""' + (!row.peak_holiday_mode ? ' selected' : '') + '>跟随全局</option>' +
+              '<option value="none"' + (row.peak_holiday_mode === 'none' ? ' selected' : '') + '>none（不区分节假日）</option>' +
+              '<option value="china"' + (row.peak_holiday_mode === 'china' ? ' selected' : '') + '>china（中国法定节假日不算高峰）</option>' +
+            '</select></div>' +
+            '<div><div class="hint">不同厂商的峰谷时段不同时，在这里单独设置；未填写的模型继续使用上方全局规则。</div></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="foot">' +
+          '<label class="provider" for="verified_' + index + '">确认状态</label>' +
+          '<select class="sel" id="verified_' + index + '">' +
+            '<option value="true"' + (row.verified ? ' selected' : '') + '>已确认（官方价核对过）</option>' +
+            '<option value="false"' + (row.verified ? '' : ' selected') + '>未确认（待核对）</option>' +
+          '</select>' +
+          '<span class="spacer"></span>' +
+          '<button class="btn primary" data-save="' + index + '">保存并应用</button>' +
+          '<button class="btn muted" data-verify="' + index + '">只改确认状态</button>' +
+          '<button class="btn ghost" data-close="' + index + '">收起</button>' +
+        '</div>' +
+      '</div>' +
+    '</section>';
+  }
+  function render() {
+    if (!rows.length) {
+      cardsEl.innerHTML = '<div class="empty">最近窗口内没有可统计的模型调用（或读库失败）。</div>';
+      return;
+    }
+    cardsEl.innerHTML = rows.map(cardHtml).join('');
+    rows.forEach((row, index) => {
+      syncUnit(index);
+      const select = document.getElementById('unit_' + index);
+      if (select) select.addEventListener('change', () => syncUnit(index));
+    });
+  }
+  function readCard(index) {
+    const data = {};
+    ['unit', 'unit_price', 'input_price', 'cache_input_price', 'output_price', 'peak_input_price', 'peak_cache_input_price', 'peak_output_price', 'peak_weekdays', 'peak_windows', 'source_url']
+      .forEach(name => {
+        const el = document.getElementById(name + '_' + index);
+        data[name] = el ? el.value.trim() : '';
+      });
+    const holiday = document.getElementById('peak_holiday_mode_' + index);
+    data.peak_holiday_mode = holiday ? holiday.value : '';
+    return data;
+  }
+  // 宿主对同一插件同时最多允许 2 个请求；账本页在后台轮询时，
+  // 这里的查询可能撞上 “Two requests are already running”，故统一做退避重试。
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  async function withRetry(fn) {
+    let last = null;
+    for (let i = 0; i < 16; i += 1) {
+      try {
+        return await fn();
+      } catch (error) {
+        last = error;
+        const message = String((error && error.message) || error || '');
+        if (!/Two requests are already running|429|too many requests|并发/i.test(message)) throw error;
+        await sleep(400 + i * 350);
+      }
+    }
+    throw last;
+  }
+
+  let loading = false;
+  let loadPending = false;
+  function busy(disabled) {
+    document.querySelectorAll('button').forEach(btn => { btn.disabled = !!disabled; });
+  }
+  function toolCardHtml(row, index) {
+    const calls = Number(row.calls || 0);
+    const price = Number(row.price_per_1000 || 0);
+    const cost = calls * price / 1000;
+    const key = String(row.provider || '') + '|' + String(row.tool || '');
+    return '<section class="card' + (toolOpen.has(key) ? ' open' : '') + '" data-key="' + esc(key) + '" data-index="' + index + '">' +
+      '<div class="card-head" data-tooltoggle="' + index + '">' +
+        '<span class="chevron">▾</span>' +
+        '<span class="model">' + esc(row.tool || '（未命名工具）') + '</span>' +
+        '<span class="provider">' + esc(row.provider || '未填服务商') + '</span>' +
+        '<span class="spacer"></span>' +
+        '<span class="price-line">' + (price > 0 ? ('¥' + esc(price) + ' / 1000 次') : '未配置单价') +
+          ' · 调用 ' + calls + ' 次' + (calls > 0 ? (' · 估算 ¥' + cost.toFixed(2)) : '') + '</span>' +
+        badge(row.status) +
+      '</div>' +
+      '<div class="card-body">' +
+        '<div class="grid2">' +
+          '<div class="panel"><h4>计价（元 / 1000 次）</h4>' +
+            field('tool_provider_' + index, '服务商（填写实际使用的联网服务）', row.provider || '') +
+            field('tool_price_' + index, '单价', price) +
+            field('tool_currency_' + index, '币种', row.currency || 'CNY') +
+            field('tool_source_' + index, '官方来源 URL', row.source_url || '') +
+            field('tool_fetched_' + index, '抓取时间', row.fetched_at || '') +
+          '</div>' +
+          '<div class="panel"><h4>说明</h4>' +
+            '<div class="hint">窗口 ' + esc(row.window_days || 30) + ' 天内调用 ' + calls + ' 次' +
+              (price > 0 ? ('，按单价估算 ¥' + cost.toFixed(2)) : '，尚未配置单价（按 0 计）') + '。</div>' +
+            '<div class="hint">工具费只统计联网检索类调用（web_search / web_fetch）。单价与币种由你按实际使用的服务商填写；币种选 USD 会按账本汇率折算。</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="foot">' +
+          '<label class="provider">确认状态</label>' +
+          '<select class="sel" id="tool_verified_' + index + '">' +
+            '<option value="true"' + (row.verified ? ' selected' : '') + '>已确认（官方价核对过）</option>' +
+            '<option value="false"' + (row.verified ? '' : ' selected') + '>未确认（待核对）</option>' +
+          '</select>' +
+          '<span class="spacer"></span>' +
+          '<button class="btn primary" data-toolsave="' + index + '">保存工具价</button>' +
+          '<button class="btn ghost" data-toolclose="' + index + '">收起</button>' +
+        '</div>' +
+      '</div>' +
+    '</section>';
+  }
+  function renderTools() {
+    if (!toolRows.length) {
+      toolEl.innerHTML = '<div class="empty">窗口内没有工具调用记录。</div>';
+      return;
+    }
+    toolEl.innerHTML = toolRows.map(toolCardHtml).join('');
+  }
+  async function saveTool(index) {
+    const row = toolRows[index];
+    if (!row) return;
+    busy(true);
+    try {
+      const get = id => ((document.getElementById(id) || {}).value || '').trim();
+      const payload = {
+        tool: String(row.tool || ''),
+        provider: get('tool_provider_' + index),
+        price_per_1000: get('tool_price_' + index),
+        currency: get('tool_currency_' + index),
+        source_url: get('tool_source_' + index),
+        fetched_at: get('tool_fetched_' + index),
+        verified: get('tool_verified_' + index) || 'false'
+      };
+      await withRetry(() => api.action('tool_save', payload));
+      say('已保存工具价：' + (row.tool || ''), 'ok');
+      await load();
+    } catch (error) {
+      say('保存失败：' + error, 'err');
+    } finally {
+      busy(false);
+    }
+  }
+
+  async function load() {
+    if (loading) { loadPending = true; return; }
+    loading = true;
+    const btn = document.getElementById('btn-refresh');
+    if (btn) btn.disabled = true;
+    try {
+      try {
+        const list = await withRetry(() => api.query('rows', {}));
+        rows = Array.isArray(list) ? list : [];
+        render();
+      } catch (error) {
+        say('价格加载失败：' + error, 'err');
+      }
+      try {
+        const peak = await withRetry(() => api.query('peak', {}));
+        peakEl.textContent = (peak && peak.text) ? peak.text : '';
+      } catch (error) {
+        say('峰谷规则加载失败：' + error, 'err');
+      }
+      try {
+        const tools = await withRetry(() => api.query('tools', {}));
+        toolRows = Array.isArray(tools) ? tools : [];
+        renderTools();
+      } catch (error) {
+        say('工具价加载失败：' + error, 'err');
+      }
+    } finally {
+      loading = false;
+      if (btn) btn.disabled = false;
+      if (loadPending) {
+        loadPending = false;
+        setTimeout(load, 50);
+      }
+    }
+  }
+
+  async function save(index) {
+    const row = rows[index];
+    if (!row) return;
+    busy(true);
+    try {
+      const values = readCard(index);
+      const payload = {
+        provider: String(row.provider || ''),
+        model: String(row.model || ''),
+        model_id: String(row.model_id || '')
+      };
+      Object.keys(values).forEach(key => {
+        if (values[key] !== '') payload[key] = values[key];
+      });
+      await withRetry(() => api.action('save', payload));
+      say('已保存：' + (payload.model || row.model || '模型') + '（新价格立即生效）', 'ok');
+      await load();
+      open.add(String(payload.provider || '') + '|' + String(payload.model || ''));
+    } catch (error) {
+      say('保存失败：' + error, 'err');
+    } finally {
+      busy(false);
+    }
+  }
+  async function verify(index) {
+    const row = rows[index];
+    if (!row) return;
+    busy(true);
+    try {
+      const value = document.getElementById('verified_' + index);
+      await withRetry(() => api.action('verify', {
+        provider: String(row.provider || ''), model: String(row.model || ''), model_id: String(row.model_id || ''),
+        verified: value && value.value === 'true' ? 'true' : 'false'
+      }));
+      say('确认状态已更新：' + (row.model || '模型'), 'ok');
+      await load();
+      open.add(String(row.provider || '') + '|' + String(row.model || ''));
+    } catch (error) {
+      say('更新失败：' + error, 'err');
+    } finally {
+      busy(false);
+    }
+  }
+  const addForm = document.getElementById('addform');
+  document.getElementById('btn-add').addEventListener('click', () => addForm.classList.toggle('show'));
+  document.getElementById('btn-add-cancel').addEventListener('click', () => addForm.classList.remove('show'));
+  document.getElementById('btn-add-save').addEventListener('click', async () => {
+    const get = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+    const model = get('add_model');
+    if (!model) { say('请填写模型标识', 'err'); return; }
+    busy(true);
+    try {
+      await withRetry(() => api.action('add', {
+        provider: get('add_provider'), model: model, model_id: get('add_model_id'),
+        aliases: get('add_aliases'), unit: get('add_unit'), unit_price: get('add_unit_price'),
+        currency: get('add_currency'), input_price: get('add_input_price'),
+        cache_input_price: get('add_cache_input_price'), output_price: get('add_output_price'),
+        peak_input_price: get('add_peak_input_price'),
+        peak_cache_input_price: get('add_peak_cache_input_price'),
+        peak_output_price: get('add_peak_output_price'),
+        peak_weekdays: get('add_peak_weekdays'),
+        peak_windows: get('add_peak_windows'),
+        peak_holiday_mode: get('add_peak_holiday_mode'),
+        source_url: get('add_source_url'), fetched_at: get('add_fetched_at'),
+        verified: get('add_verified')
+      }));
+      say('已新增/合并价格：' + model, 'ok');
+      addForm.classList.remove('show');
+      await load();
+    } catch (error) {
+      say('新增失败：' + error, 'err');
+    } finally {
+      busy(false);
+    }
+  });
+  cardsEl.addEventListener('click', event => {
+    const head = event.target.closest('[data-toggle]');
+    if (head) {
+      const index = Number(head.getAttribute('data-toggle'));
+      const row = rows[index];
+      if (row) {
+        const key = String(row.provider || '') + '|' + String(row.model || '');
+        if (open.has(key)) open.delete(key); else open.add(key);
+        render();
+      }
+      return;
+    }
+    const saveBtn = event.target.closest('[data-save]');
+    if (saveBtn) { save(Number(saveBtn.getAttribute('data-save'))); return; }
+    const verifyBtn = event.target.closest('[data-verify]');
+    if (verifyBtn) { verify(Number(verifyBtn.getAttribute('data-verify'))); return; }
+    const closeBtn = event.target.closest('[data-close]');
+    if (closeBtn) {
+      const row = rows[Number(closeBtn.getAttribute('data-close'))];
+      if (row) open.delete(String(row.provider || '') + '|' + String(row.model || ''));
+      render();
+    }
+  });
+  toolEl.addEventListener('click', event => {
+    const saveBtn = event.target.closest('[data-toolsave]');
+    if (saveBtn) { saveTool(Number(saveBtn.getAttribute('data-toolsave'))); return; }
+    const closeBtn = event.target.closest('[data-toolclose]');
+    if (closeBtn) {
+      const idx = Number(closeBtn.getAttribute('data-toolclose'));
+      const row = toolRows[idx];
+      if (row) {
+        toolOpen.delete(String(row.provider || '') + '|' + String(row.tool || ''));
+        const sec = closeBtn.closest('section.card');
+        if (sec) sec.classList.remove('open');
+      }
+      return;
+    }
+    const head = event.target.closest('[data-tooltoggle]');
+    if (head) {
+      const idx = Number(head.getAttribute('data-tooltoggle'));
+      const row = toolRows[idx];
+      if (!row) return;
+      const key = String(row.provider || '') + '|' + String(row.tool || '');
+      const sec = head.closest('section.card');
+      if (sec && sec.classList.toggle('open')) toolOpen.add(key); else toolOpen.delete(key);
+    }
+  });
+  document.getElementById('btn-refresh').addEventListener('click', async () => {
+    if (loading) {
+      loadPending = true;
+      say('正在刷新…（等当前请求结束后继续）');
+      return;
+    }
+    say('正在刷新…');
+    await load();
+    say('已刷新 ' + new Date().toLocaleTimeString(), 'ok');
+  });
+  api.ready.then(load);
+})();
+</script>

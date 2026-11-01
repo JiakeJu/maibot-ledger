@@ -1,0 +1,519 @@
+{
+  "schema_version": 2,
+  "required_capabilities": [
+    "declarative_basic",
+    "custom_pages"
+  ],
+  "workspace_title": "麦麦不贪吃（Token Ledger）",
+  "pages": [
+    {
+      "id": "ledger",
+      "title": "账本",
+      "description": "只读宿主 llm_usage 的 token 用量，按官方价格库演算费用；核心是按群统计花费与消耗。",
+      "placement": "workspace",
+      "icon": "chart",
+      "mode": "declarative",
+      "auto_refresh": true,
+      "queries": {
+        "overview": {
+          "api": "ledger_overview_range",
+          "version": "1",
+          "parameters": {
+            "range_key": {
+              "type": "string",
+              "required": true,
+              "choices": [
+                "24h",
+                "7d",
+                "30d"
+              ]
+            },
+            "scope": {
+              "type": "string",
+              "choices": [
+                "all",
+                "chat"
+              ]
+            }
+          }
+        },
+        "series": {
+          "api": "ledger_series",
+          "version": "1",
+          "parameters": {
+            "range_key": {
+              "type": "string",
+              "required": true,
+              "choices": [
+                "24h",
+                "7d",
+                "30d"
+              ]
+            },
+            "scope": {
+              "type": "string",
+              "choices": [
+                "all",
+                "chat"
+              ]
+            }
+          }
+        },
+        "groups": {
+          "api": "ledger_groups",
+          "version": "1",
+          "parameters": {
+            "range_key": {
+              "type": "string",
+              "required": true,
+              "choices": [
+                "24h",
+                "7d",
+                "30d"
+              ]
+            }
+          }
+        }
+      },
+      "content": [
+        {
+          "type": "select",
+          "name": "range_key",
+          "label": "时间范围",
+          "value": "7d",
+          "options": [
+            {
+              "label": "24 小时",
+              "value": "24h"
+            },
+            {
+              "label": "近 7 天",
+              "value": "7d"
+            },
+            {
+              "label": "近 30 天",
+              "value": "30d"
+            }
+          ]
+        },
+        {
+          "type": "select",
+          "name": "scope",
+          "label": "统计范围",
+          "value": "all",
+          "options": [
+            {
+              "label": "全部调用（含后台）",
+              "value": "all"
+            },
+            {
+              "label": "仅聊天",
+              "value": "chat"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "value": {
+            "scope": "query",
+            "source": "overview",
+            "field": "status_text"
+          }
+        },
+        {
+          "type": "grid",
+          "columns": 3,
+          "children": [
+            {
+              "type": "stat",
+              "label": "总花费（元，含工具费）",
+              "value": {
+                "scope": "query",
+                "source": "overview",
+                "field": "total_cost"
+              }
+            },
+            {
+              "type": "stat",
+              "label": "其中 Token 费用（元）",
+              "value": {
+                "scope": "query",
+                "source": "overview",
+                "field": "token_cost"
+              }
+            },
+            {
+              "type": "stat",
+              "label": "其中工具费估算（元）",
+              "value": {
+                "scope": "query",
+                "source": "overview",
+                "field": "tool_cost"
+              }
+            },
+            {
+              "type": "stat",
+              "label": "总 Token",
+              "value": {
+                "scope": "query",
+                "source": "overview",
+                "field": "tokens"
+              }
+            },
+            {
+              "type": "stat",
+              "label": "请求数",
+              "value": {
+                "scope": "query",
+                "source": "overview",
+                "field": "requests"
+              }
+            },
+            {
+              "type": "stat",
+              "label": "群聊数",
+              "value": {
+                "scope": "query",
+                "source": "overview",
+                "field": "groups_count"
+              }
+            },
+            {
+              "type": "stat",
+              "label": "后台调用费用（元，Token）",
+              "value": {
+                "scope": "query",
+                "source": "overview",
+                "field": "background_cost"
+              }
+            }
+          ]
+        },
+        {
+          "type": "card",
+          "label": "Token 费用趋势（元）",
+          "children": [
+            {
+              "type": "chart",
+              "value": {
+                "scope": "query",
+                "source": "series"
+              },
+              "chart_type": "line",
+              "x": "bucket",
+              "y": "cost"
+            }
+          ]
+        },
+        {
+          "type": "grid",
+          "columns": 2,
+          "children": [
+            {
+              "type": "card",
+              "label": "群聊 Token 消耗",
+              "children": [
+                {
+                  "type": "chart",
+                  "value": {
+                    "scope": "query",
+                    "source": "groups"
+                  },
+                  "chart_type": "bar",
+                  "x": "group",
+                  "y": "tokens"
+                }
+              ]
+            },
+            {
+              "type": "card",
+              "label": "群聊费用开销（元）",
+              "children": [
+                {
+                  "type": "chart",
+                  "value": {
+                    "scope": "query",
+                    "source": "groups"
+                  },
+                  "chart_type": "bar",
+                  "x": "group",
+                  "y": "cost"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "card",
+          "label": "按群明细",
+          "children": [
+            {
+              "type": "table",
+              "value": {
+                "scope": "query",
+                "source": "groups"
+              },
+              "columns": [
+                {
+                  "field": "group",
+                  "label": "群聊"
+                },
+                {
+                  "field": "requests",
+                  "label": "请求数"
+                },
+                {
+                  "field": "prompt_tokens",
+                  "label": "输入 Token"
+                },
+                {
+                  "field": "output_tokens",
+                  "label": "输出 Token"
+                },
+                {
+                  "field": "tokens",
+                  "label": "总 Token"
+                },
+                {
+                  "field": "cost",
+                  "label": "费用（元）"
+                },
+                {
+                  "field": "cache_hit_ratio",
+                  "label": "缓存命中 %"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "card",
+          "label": "口径与识别",
+          "children": [
+            {
+              "type": "text",
+              "value": {
+                "scope": "query",
+                "source": "overview",
+                "field": "unknown_text"
+              }
+            },
+            {
+              "type": "text",
+              "value": "总花费 = Token 费用 + 工具费估算；Token 费用按 token 用量与价格库演算，不采用宿主记录的费用；未识别模型按 0 计。「统计范围」可在「全部调用（含后台）」与「仅聊天」间切换（仅影响 Token 统计）。与 API 平台账单的差异主要来自：平台按 key 统计含失败/重试请求、峰谷计价细则、后台调用口径；工具费按 ¥5/1000 次估算。"
+            }
+          ]
+        }
+      ],
+      "poll_interval_seconds": 30
+    },
+    {
+      "id": "prices",
+      "title": "价格库",
+      "description": "一级只显示模型与确认状态；点开二级，左列常规报价（输入/缓存命中/输出）、右列峰谷报价；输入框已按当前值预填，保存后立即用于费用演算。",
+      "placement": "workspace",
+      "icon": "database",
+      "queries": {
+        "rows": {
+          "api": "prices_rows",
+          "version": "1"
+        },
+        "peak": {
+          "api": "peak_rule",
+          "version": "1"
+        },
+        "tools": {
+          "api": "tool_prices",
+          "version": "1"
+        }
+      },
+      "actions": {
+        "save": {
+          "api": "price_save",
+          "version": "1",
+          "parameters": {
+            "provider": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string",
+              "required": true
+            },
+            "model_id": {
+              "type": "string"
+            },
+            "aliases": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string"
+            },
+            "unit_price": {
+              "type": "string"
+            },
+            "currency": {
+              "type": "string"
+            },
+            "input_price": {
+              "type": "string"
+            },
+            "cache_input_price": {
+              "type": "string"
+            },
+            "output_price": {
+              "type": "string"
+            },
+            "peak_input_price": {
+              "type": "string"
+            },
+            "peak_cache_input_price": {
+              "type": "string"
+            },
+            "peak_output_price": {
+              "type": "string"
+            },
+            "peak_weekdays": {
+              "type": "string"
+            },
+            "peak_windows": {
+              "type": "string"
+            },
+            "peak_holiday_mode": {
+              "type": "string"
+            },
+            "source_url": {
+              "type": "string"
+            },
+            "fetched_at": {
+              "type": "string"
+            },
+            "verified": {
+              "type": "string"
+            }
+          },
+          "confirmation": "保存后立即用于费用演算，确认写入？"
+        },
+        "verify": {
+          "api": "price_verify",
+          "version": "1",
+          "parameters": {
+            "provider": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string",
+              "required": true
+            },
+            "verified": {
+              "type": "string",
+              "required": true
+            },
+            "model_id": {
+              "type": "string"
+            }
+          },
+          "confirmation": "修改确认状态后生效，继续？"
+        },
+        "tool_save": {
+          "api": "tool_price_save",
+          "version": "1",
+          "parameters": {
+            "tool": {
+              "type": "string",
+              "required": true
+            },
+            "price_per_1000": {
+              "type": "string"
+            },
+            "currency": {
+              "type": "string"
+            },
+            "source_url": {
+              "type": "string"
+            },
+            "fetched_at": {
+              "type": "string"
+            },
+            "verified": {
+              "type": "string"
+            },
+            "note": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            }
+          }
+        },
+        "add": {
+          "api": "price_add",
+          "version": "1",
+          "parameters": {
+            "provider": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string",
+              "required": true
+            },
+            "model_id": {
+              "type": "string"
+            },
+            "aliases": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string"
+            },
+            "unit_price": {
+              "type": "string"
+            },
+            "currency": {
+              "type": "string"
+            },
+            "input_price": {
+              "type": "string"
+            },
+            "cache_input_price": {
+              "type": "string"
+            },
+            "output_price": {
+              "type": "string"
+            },
+            "peak_input_price": {
+              "type": "string"
+            },
+            "peak_cache_input_price": {
+              "type": "string"
+            },
+            "peak_output_price": {
+              "type": "string"
+            },
+            "peak_weekdays": {
+              "type": "string"
+            },
+            "peak_windows": {
+              "type": "string"
+            },
+            "peak_holiday_mode": {
+              "type": "string"
+            },
+            "source_url": {
+              "type": "string"
+            },
+            "fetched_at": {
+              "type": "string"
+            },
+            "verified": {
+              "type": "string"
+            }
+          },
+          "confirmation": "将新增/合并一条模型价格并立即用于费用演算，继续？"
+        }
+      },
+      "mode": "custom",
+      "entry": "webui/prices.html",
+      "layout": "document"
+    }
+  ]
+}
