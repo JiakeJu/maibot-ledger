@@ -294,8 +294,8 @@ class PluginSection(PluginConfigBase):
         description="是否启用账本插件（默认 true；关闭后页面不刷新、首页卡片不更新）。",
     )
     config_version: str = Field(
-        default="0.1.0",
-        description="配置结构版本（默认 0.1.0；插件升级时由插件自行迁移，一般无需手动修改）。",
+        default="0.1.1",
+        description="配置结构版本（默认 0.1.1；插件升级时由插件自行迁移，一般无需手动修改）。",
     )
 
 

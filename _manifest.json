@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "id": "github.jiakeju.token-ledger",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "name": "麦麦不贪吃（Token Ledger）",
   "description": "读取宿主 token 用量，按自维护价格库（支持峰谷价、星期与节假日）重算费用，提供按群与按模型的图表看板，并给出工具调用费估算。只读数据库，不发消息。",
   "author": {
