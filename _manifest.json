@@ -28,12 +28,6 @@
   "capabilities": [
     "database.get"
   ],
-  "display": {
-    "icon": {
-      "type": "local",
-      "value": "assets/icon.png"
-    }
-  },
   "i18n": {
     "default_locale": "zh-CN"
   }
