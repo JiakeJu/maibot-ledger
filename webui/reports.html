@@ -1,0 +1,386 @@
+﻿<div class="page maibot-page">
+  <div class="topbar">
+    <div>
+      <div class="title">周报 / 月报</div>
+      <div class="hint" id="coverage">加载中…</div>
+    </div>
+    <div class="actions">
+      <button class="btn ghost" id="btn-refresh">刷新</button>
+    </div>
+  </div>
+
+  <div class="notice">
+    周期结束后自动生成并写入插件本地文件（<b>生成后不再改动</b>），插件装载后会自动补齐历史周期。
+    周报以<b>周一</b>为起点，月报为<b>自然月</b>（北京时间）；费用按生成时的价格库快照计算，历史费用不受后续改价影响。
+  </div>
+
+  <div class="toolbar">
+    <div class="seg" id="kind-switch">
+      <button data-kind="weekly" class="on">周报</button>
+      <button data-kind="monthly">月报</button>
+    </div>
+    <span class="spacer"></span>
+    <label class="fl">聊天流
+      <select id="sel-chat"><option value="">全部</option></select>
+    </label>
+    <label class="fl">模型
+      <select id="sel-model"><option value="">全部</option></select>
+    </label>
+  </div>
+
+  <div class="chips" id="periods"></div>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="grid3">
+    <section class="panel">
+      <h4>按聊天流花费</h4>
+      <div class="hint" id="hint-chat">按聊天流（群 / 私聊 / 后台）聚合</div>
+      <div class="bars" id="chart-chat"></div>
+    </section>
+    <section class="panel">
+      <h4>按模型花费</h4>
+      <div class="hint" id="hint-model">按模型（宿主模型标识）聚合</div>
+      <div class="bars" id="chart-model"></div>
+    </section>
+  </div>
+
+  <section class="panel">
+    <h4>每日花费（本期）</h4>
+    <div class="vbars" id="chart-day"></div>
+  </section>
+
+  <section class="panel">
+    <h4>周期汇总</h4>
+    <table class="tbl">
+      <thead><tr><th>周期</th><th>区间</th><th class="num">花费</th><th class="num">请求</th><th class="num">Token</th></tr></thead>
+      <tbody id="period-rows"></tbody>
+    </table>
+  </section>
+
+  <div id="msg" class="msg" role="status" aria-live="polite"></div>
+</div>
+
+<style>
+  :root {
+    color-scheme: light dark;
+    --fg: var(--maibot-foreground, #1f2328);
+    --muted-fg: var(--maibot-muted, #57606a);
+    --bd: var(--maibot-border, rgba(27, 31, 36, 0.18));
+    --card-bg: var(--maibot-surface, #ffffff);
+    --input-bg: var(--maibot-soft, #f5f6f8);
+    --primary: var(--maibot-primary, #2563eb);
+    --danger: var(--maibot-danger, #dc2626);
+    --radius: var(--maibot-radius, 10px);
+    --font: var(--maibot-font, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif);
+  }
+  html, body { margin: 0; padding: 0; background: transparent; }
+  body, .page { color: var(--fg); font-family: var(--font); font-size: 14px; line-height: 1.55; }
+  .page { padding: 18px 20px 32px; }
+  .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .title { font-size: 20px; font-weight: 700; letter-spacing: .2px; }
+  .hint { color: var(--muted-fg); font-size: 12.5px; margin-top: 4px; }
+  .notice { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--bd); border-radius: var(--radius); background: var(--input-bg); color: var(--muted-fg); font-size: 12.5px; }
+  .toolbar { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  .spacer { flex: 1; }
+  .fl { display: inline-flex; align-items: center; gap: 6px; color: var(--muted-fg); font-size: 12.5px; }
+  select, input { background: var(--card-bg); color: var(--fg); border: 1px solid var(--bd); border-radius: 8px; padding: 5px 8px; font-family: inherit; font-size: 13px; }
+  .btn { cursor: pointer; border: 1px solid var(--bd); border-radius: 8px; padding: 6px 12px; font-size: 13px; background: var(--card-bg); color: var(--fg); }
+  .btn.ghost:hover { background: var(--input-bg); }
+  .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .seg { display: inline-flex; border: 1px solid var(--bd); border-radius: 9px; overflow: hidden; }
+  .seg button { border: 0; background: transparent; color: var(--muted-fg); padding: 6px 14px; font-size: 13px; cursor: pointer; font-family: inherit; }
+  .seg button.on { background: var(--primary); color: #fff; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; min-height: 30px; }
+  .chip { border: 1px solid var(--bd); border-radius: 999px; padding: 4px 12px; font-size: 12.5px; cursor: pointer; color: var(--muted-fg); background: var(--card-bg); }
+  .chip.on { border-color: var(--primary); color: var(--primary); font-weight: 600; }
+  .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+  .stat { border: 1px solid var(--bd); border-radius: var(--radius); padding: 10px 12px; background: var(--card-bg); }
+  .stat .k { color: var(--muted-fg); font-size: 12px; }
+  .stat .v { font-size: 20px; font-weight: 700; margin-top: 2px; }
+  .grid3 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+  .panel { border: 1px solid var(--bd); border-radius: var(--radius); padding: 12px 14px; background: var(--card-bg); margin-top: 12px; }
+  .grid3 .panel { margin-top: 0; }
+  .panel h4 { margin: 0 0 8px; font-size: 13.5px; }
+  .bars { display: flex; flex-direction: column; gap: 7px; margin-top: 6px; }
+  .bar-row { display: grid; grid-template-columns: 140px 1fr 92px; gap: 8px; align-items: center; font-size: 12.5px; }
+  .bar-row .lb { color: var(--muted-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar-track { background: var(--input-bg); border-radius: 6px; height: 14px; overflow: hidden; }
+  .bar-fill { display: block; height: 100%; background: var(--primary); opacity: .85; border-radius: 6px; min-width: 2px; }
+  .bar-row .vv { text-align: right; font-variant-numeric: tabular-nums; }
+  .vbars { display: flex; align-items: flex-end; gap: 4px; height: 150px; margin-top: 10px; }
+  .vbar { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; min-width: 0; }
+  .vbar .b { width: 100%; background: var(--primary); opacity: .7; border-radius: 3px 3px 0 0; min-height: 2px; }
+  .vbar .d { color: var(--muted-fg); font-size: 10px; white-space: nowrap; transform: scale(.92); }
+  .tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .tbl th, .tbl td { border-bottom: 1px solid var(--bd); padding: 7px 6px; text-align: left; }
+  .tbl th { color: var(--muted-fg); font-weight: 600; }
+  .tbl .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .tbl tbody tr { cursor: pointer; }
+  .tbl tbody tr:hover { background: var(--input-bg); }
+  .empty { color: var(--muted-fg); font-size: 12.5px; padding: 12px 0; }
+  .msg { margin-top: 12px; font-size: 12.5px; color: var(--danger); min-height: 18px; }
+  @media (max-width: 900px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .grid3 { grid-template-columns: 1fr; } }
+</style>
+
+<script>
+  const api = window.maibot;
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  async function withRetry(fn) {
+    let last = null;
+    for (let i = 0; i < 16; i += 1) {
+      try {
+        return await fn();
+      } catch (error) {
+        last = error;
+        const message = String((error && error.message) || error || '');
+        if (!/Two requests are already running|429|too many requests|并发/i.test(message)) throw error;
+        await sleep(400 + i * 350);
+      }
+    }
+    throw last;
+  }
+
+  const state = { kind: 'weekly', periods: [], report: null, chat: '', model: '', loading: false };
+
+  function esc(value) {
+    return String(value === undefined || value === null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function money(value) {
+    const num = Number(value || 0);
+    return '¥' + num.toFixed(num < 1 ? 3 : 2);
+  }
+  function num(value) {
+    return Number(value || 0).toLocaleString('zh-CN');
+  }
+  function tokens(value) {
+    const n = Number(value || 0);
+    if (n >= 100000000) return (n / 100000000).toFixed(2) + ' 亿';
+    if (n >= 10000) return (n / 10000).toFixed(1) + ' 万';
+    return num(n);
+  }
+  function msg(text, bad) {
+    const el = document.getElementById('msg');
+    el.style.color = bad ? 'var(--danger)' : 'var(--muted-fg)';
+    el.textContent = text || '';
+  }
+  function fillSelect(id, rows, key, label) {
+    const el = document.getElementById(id);
+    const current = el.value;
+    el.innerHTML = '<option value="">全部</option>' + rows.map((row) =>
+      '<option value="' + esc(row[key]) + '">' + esc(row[label] || row[key]) + '</option>').join('');
+    el.value = rows.some((row) => String(row[key]) === current) ? current : '';
+  }
+
+  function renderPeriods() {
+    const box = document.getElementById('periods');
+    if (!state.periods.length) {
+      box.innerHTML = '<span class="hash">还没有已结束的周期（插件装载后会自动补齐历史）。</span>';
+      return;
+    }
+    const active = state.report && state.report.period;
+    box.innerHTML = state.periods.map((row) =>
+      '<button class="chip' + (row.period === active ? ' on' : '') + '" data-period="' + esc(row.period) + '">' +
+      esc(row.period) + '</button>').join('');
+    box.querySelectorAll('[data-period]').forEach((btn) => {
+      btn.addEventListener('click', () => selectPeriod(btn.dataset.period));
+    });
+  }
+
+  function renderStats() {
+    const box = document.getElementById('stats');
+    const report = state.report;
+    if (!report) { box.innerHTML = ''; return; }
+    const overview = report.overview || {};
+    let cost = Number(overview.cost || 0);
+    let requests = Number(overview.requests || 0);
+    let totalTokens = Number(overview.tokens || 0);
+    if (state.chat) {
+      const row = (report.by_chat || []).find((item) => item.key === state.chat);
+      cost = row ? Number(row.cost || 0) : 0;
+      requests = row ? Number(row.requests || 0) : 0;
+      totalTokens = row ? Number(row.tokens || 0) : 0;
+    } else if (state.model) {
+      const row = (report.by_model || []).find((item) => item.key === state.model);
+      cost = row ? Number(row.cost || 0) : 0;
+      requests = row ? Number(row.requests || 0) : 0;
+      totalTokens = row ? Number(row.tokens || 0) : 0;
+    }
+    const cards = [
+      ['花费', money(cost)],
+      ['请求数', num(requests)],
+      ['Token', tokens(totalTokens)],
+      ['聊天流 / 模型', num(overview.chats_count || 0) + ' / ' + num(overview.models_count || 0)],
+    ];
+    box.innerHTML = cards.map((item) =>
+      '<div class="stat"><div class="k">' + esc(item[0]) + '</div><div class="v">' + esc(item[1]) + '</div></div>').join('');
+  }
+
+  function barRows(rows, key, label, emptyText) {
+    const list = rows || [];
+    const max = list.reduce((acc, row) => Math.max(acc, Number(row.cost || 0)), 0) || 1;
+    if (!list.length) return '<div class="empty">' + esc(emptyText) + '</div>';
+    return list.map((row) => {
+      const width = Math.max(1, Math.round((Number(row.cost || 0) / max) * 100));
+      return '<div class="bar-row" title="' + esc(row[label]) + '：' + money(row.cost) + ' · ' + num(row.requests) + ' 次 · ' + tokens(row.tokens) + ' tokens">' +
+        '<span class="lb">' + esc(row[label] || row[key]) + '</span>' +
+        '<span class="bar-track"><span class="bar-fill" style="width:' + width + '%"></span></span>' +
+        '<span class="vv">' + money(row.cost) + '</span></div>';
+    }).join('');
+  }
+
+  function renderCharts() {
+    const report = state.report;
+    const chats = ((report && report.by_chat) || []).filter((row) => !state.chat || row.key === state.chat);
+    const models = ((report && report.by_model) || []).filter((row) => !state.model || row.key === state.model);
+    document.getElementById('chart-chat').innerHTML = barRows(chats, 'key', 'label', '本期没有聊天流数据');
+    document.getElementById('chart-model').innerHTML = barRows(models, 'key', 'model', '本期没有模型数据');
+    document.getElementById('hint-chat').textContent = state.model
+      ? '当前按模型筛选：聊天流柱状图仍为本期全量，统计卡显示所选模型' : '按聊天流（群 / 私聊 / 后台）聚合';
+    document.getElementById('hint-model').textContent = state.chat
+      ? '当前按聊天流筛选：模型柱状图仍为本期全量，统计卡显示所选聊天流' : '按模型（宿主模型标识）聚合';
+
+    const days = (report && report.by_day) || [];
+    const box = document.getElementById('chart-day');
+    if (!days.length) {
+      box.innerHTML = '<div class="empty">本期没有每日数据</div>';
+      return;
+    }
+    const max = days.reduce((acc, row) => Math.max(acc, Number(row.cost || 0)), 0) || 1;
+    box.innerHTML = days.map((row) => {
+      const height = Math.max(2, Math.round((Number(row.cost || 0) / max) * 120));
+      return '<div class="vbar" title="' + esc(row.date) + '：' + money(row.cost) + ' · ' + num(row.requests) + ' 次">' +
+        '<span class="b" style="height:' + height + 'px"></span>' +
+        '<span class="d">' + esc(String(row.date || '').slice(5)) + '</span></div>';
+    }).join('');
+  }
+
+  function renderTable() {
+    const rows = document.getElementById('period-rows');
+    if (!state.periods.length) { rows.innerHTML = ''; return; }
+    rows.innerHTML = state.periods.map((row) =>
+      '<tr data-period="' + esc(row.period) + '"><td>' + esc(row.period) + '</td><td>' + esc(row.label) +
+      '</td><td class="num">' + money(row.cost) + '</td><td class="num">' + num(row.requests) +
+      '</td><td class="num">' + num(row.tokens) + '</td></tr>').join('');
+    rows.querySelectorAll('[data-period]').forEach((tr) => {
+      tr.addEventListener('click', () => selectPeriod(tr.dataset.period));
+    });
+  }
+
+  function renderAll() {
+    renderPeriods();
+    renderStats();
+    renderCharts();
+    renderTable();
+  }
+
+  async function selectPeriod(period) {
+    if (!period) return;
+    msg('正在读取 ' + period + ' …');
+    try {
+      const result = await withRetry(() => api.query('detail', { kind: state.kind, period: period }));
+      state.report = result && result.report ? result.report : null;
+      if (!state.report) { msg('该周期还没有生成记录', true); return; }
+      state.chat = '';
+      state.model = '';
+      fillSelect('sel-chat', state.report.by_chat || [], 'key', 'label');
+      fillSelect('sel-model', state.report.by_model || [], 'key', 'model');
+      document.getElementById('sel-chat').value = '';
+      document.getElementById('sel-model').value = '';
+      msg('');
+      renderAll();
+    } catch (error) {
+      msg('读取失败：' + String((error && error.message) || error), true);
+    }
+  }
+
+  async function load() {
+    if (state.loading) return;
+    state.loading = true;
+    document.getElementById('btn-refresh').disabled = true;
+    msg('正在加载…');
+    try {
+      const result = await withRetry(() => api.query('snapshot', { kind: state.kind }));
+      state.periods = (result && result.periods) || [];
+      state.report = (result && result.latest) || null;
+      state.chat = '';
+      state.model = '';
+      const coverage = (result && result.coverage) || {};
+      document.getElementById('coverage').textContent = coverage.first
+        ? ('已累计 ' + coverage.first + ' ~ ' + coverage.last + ' · ' + num(coverage.rows) + ' 条用量记录 · 更新于 ' + (coverage.updated_at || '—'))
+        : '还没有可用的宿主用量数据（插件装载后会自动聚合）';
+      fillSelect('sel-chat', (state.report && state.report.by_chat) || [], 'key', 'label');
+      fillSelect('sel-model', (state.report && state.report.by_model) || [], 'key', 'model');
+      msg('');
+      renderAll();
+    } catch (error) {
+      msg('加载失败：' + String((error && error.message) || error), true);
+    } finally {
+      state.loading = false;
+      document.getElementById('btn-refresh').disabled = false;
+    }
+  }
+
+  document.getElementById('kind-switch').addEventListener('click', (event) => {
+    const btn = event.target.closest('[data-kind]');
+    if (!btn) return;
+    state.kind = btn.dataset.kind === 'monthly' ? 'monthly' : 'weekly';
+    document.querySelectorAll('#kind-switch button').forEach((item) => {
+      item.classList.toggle('on', item.dataset.kind === state.kind);
+    });
+    load();
+  });
+  document.getElementById('sel-chat').addEventListener('change', (event) => {
+    state.chat = event.target.value;
+    document.getElementById('sel-model').value = '';
+    state.model = '';
+    renderStats();
+    renderCharts();
+  });
+  document.getElementById('sel-model').addEventListener('change', (event) => {
+    state.model = event.target.value;
+    document.getElementById('sel-chat').value = '';
+    state.chat = '';
+    renderStats();
+    renderCharts();
+  });
+  document.getElementById('btn-refresh').addEventListener('click', load);
+
+  // 宿主的自定义页会话在切换标签时会重新挂载；若 ready 消息比宿主监听器更早到达，
+  // 握手就会丢失、页面停在「加载中」。这里主动重发 ready，直到收到 connect。
+  let __connected = false;
+  let __nonce = '';
+  try {
+    for (const node of document.querySelectorAll('script')) {
+      const hit = /"([0-9a-f]{32})"/.exec(node.textContent || '');
+      if (hit) { __nonce = hit[1]; break; }
+    }
+  } catch (error) { __nonce = ''; }
+  function __reping(attempt) {
+    if (__connected || attempt > 40) return;
+    try {
+      if (__nonce) parent.postMessage({ type: 'maibot:ready', nonce: __nonce }, '*');
+    } catch (error) { /* 忽略 */ }
+    setTimeout(function () { __reping(attempt + 1); }, 700);
+  }
+  // SDK 的 api.ready 在不同版本里可能是 Promise 也可能需要调用；两种都兼容，
+  // 并且一开始就直接 load()（api.query 内部会等通道建立），避免任何一步抛错就整页卡住。
+  load();
+  try {
+    var __ready = (typeof api.ready === 'function') ? api.ready() : api.ready;
+    if (__ready && typeof __ready.then === 'function') {
+      __ready.then(function () { __connected = true; load(); }, function () { __connected = true; load(); });
+    } else {
+      __connected = true;
+    }
+  } catch (error) {
+    __connected = true;
+  }
+  __reping(0);
+  setTimeout(function () {
+    if (!state.periods.length) msg('还在等待宿主连接…若一直不出现内容，请切换一下页面再回来', true);
+  }, 8000);
+</script>

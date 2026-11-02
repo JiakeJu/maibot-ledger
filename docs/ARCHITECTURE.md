@@ -8,6 +8,8 @@
 | `LedgerPlugin` | 插件主体：取数、聚合、计价、缓存、首页卡片、页面 API |
 | `webui.json` | 页面声明：`ledger`（声明式）、`prices`（自定义 HTML） |
 | `webui/prices.html` | 价格库编辑页（自包含 HTML/CSS/JS，通过 `api.query` / `api.action` 与插件通信） |
+| `webui/reports.html` | 周报 / 月报页（自包含 HTML/CSS/JS，读 `reports_snapshot` / `report_detail`） |
+| 周报 / 月报 | 日聚合 → 周期报告：`_ingest_daily`、`_build_period_report`、`_ensure_reports` |
 
 ## 数据流
 
@@ -46,6 +48,8 @@ chat_sessions (ChatSession) ┘                                                 
 | `price_save` / `price_add` / `price_verify` | 保存 / 新增 / 确认价格 |
 | `tool_prices` / `tool_price_save` | 工具调用价 |
 | `peak_rule` | 当前峰谷规则摘要 |
+| `reports_snapshot` | 周报 / 月报周期列表与汇总 |
+| `report_detail` | 单个周期的明细（按聊天流 / 按模型 / 按天） |
 
 页面通过 `queries`（只读）与 `actions`（需 `confirmation`）调用上述 API；参数在 `webui.json` 中显式声明，未声明参数会被宿主拒绝。
 
@@ -55,6 +59,7 @@ chat_sessions (ChatSession) ┘                                                 
 - 命中缓存立即返回；过期时返回旧值并在后台重算；无缓存时返回占位并显示「正在计算」。
 - 会话映射缓存 10 分钟；价格库条目缓存 60 秒；价格保存后失效。
 - 定时把首页卡片文案写入 `card_cache.json`，注册组件时读取。
+- 周报 / 月报：`daily_usage.json` 为日聚合缓存（15 分钟 TTL、增量 12,000 行），`reports/weekly/*.json`、`reports/monthly/*.json` 为不可变记录（含价格快照）；报告快照缓存 30 秒。
 
 ## 数据与隐私
 

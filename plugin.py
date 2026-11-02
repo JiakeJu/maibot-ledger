@@ -3,8 +3,10 @@
 - 只读宿主 ``llm_usage``（``ModelUsage``）与 ``ChatSession``，不写库、不发消息；
 - 按自维护价格库（支持峰谷价、星期与节假日规则）重算每次请求费用；
 - 首页卡片给近 7 天摘要，工作区页面给总览、趋势与按群/按模型明细；
-- 价格库按实际用过的模型生成，未识别模型不猜价，留给你手动补。
+- 价格库按实际用过的模型生成，未识别模型不猜价，留给你手动补；
+- 周报 / 月报：周期结束后自动生成不可变记录（写在插件数据目录，生成后不再改写）。
 """
+
 
 from __future__ import annotations
 
@@ -13,7 +15,7 @@ import json
 import re
 import time
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
@@ -29,6 +31,12 @@ REPORT_CACHE_FILE = "report_cache.json"
 SESSION_TTL_SECONDS = 600
 RANGE_DAYS = {"24h": 1, "7d": 7, "30d": 30}
 CARD_CACHE_FILE = "card_cache.json"
+REPORTS_DIR = "reports"
+DAILY_CACHE_FILE = "daily_usage.json"
+DAILY_WINDOW_DAYS = 200
+DAILY_TTL_SECONDS = 900
+INCREMENTAL_LIMIT = 12000
+SNAPSHOT_TTL_SECONDS = 30
 
 # 中国 2026 年法定节假日（近似维护；插件只用于判峰谷，不涉及结算规则）
 
@@ -294,8 +302,8 @@ class PluginSection(PluginConfigBase):
         description="是否启用账本插件（默认 true；关闭后页面不刷新、首页卡片不更新）。",
     )
     config_version: str = Field(
-        default="0.1.1",
-        description="配置结构版本（默认 0.1.1；插件升级时由插件自行迁移，一般无需手动修改）。",
+        default="0.1.2",
+        description="配置结构版本（默认 0.0.2；插件升级时由插件自行迁移，一般无需手动修改）。",
     )
 
 
@@ -379,15 +387,15 @@ class PriceEntry(PluginConfigBase):
     )
     peak_weekdays: str = Field(
         default="",
-        description="单个模型的高峰星期（默认空=跟随「峰谷时段」全局设置；格式如 1-5，留空表示跟随）。",
+        description="本模型的高峰星期（默认空=跟随「峰谷时段」全局设置；格式如 1-5）。",
     )
     peak_windows: str = Field(
         default="",
-        description="单个模型的高峰时段（北京时间，默认空=跟随全局；如 09:00-12:00,14:00-18:00）。",
+        description="本模型的高峰时段（北京时间，默认空=跟随全局；如 09:00-12:00,14:00-18:00）。",
     )
-    peak_holiday_mode: str = Field(
+    peak_holiday_mode: Literal["", "none", "china"] = Field(
         default="",
-        description="单个模型的节假日规则（默认空=跟随全局；none=不区分节假日；china=中国法定节假日不算高峰）。",
+        description="本模型的节假日规则（默认空=跟随全局；none=不区分节假日；china=中国法定节假日不算高峰）。",
     )
     source_url: str = Field(
         default="",
@@ -460,6 +468,8 @@ class LedgerPlugin(MaiBotPlugin):
 
     config_model = LedgerPluginConfig
     config: LedgerPluginConfig
+
+    # ── 配置 schema ──
 
     @classmethod
     def build_config_schema(cls, **kwargs: Any) -> Dict[str, Any]:
@@ -808,9 +818,9 @@ class LedgerPlugin(MaiBotPlugin):
             return []
         return rows if isinstance(rows, list) else []
 
-    async def _load_usage(self, days: int) -> List[Dict[str, Any]]:
+    async def _load_usage(self, days: int, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         cutoff = time.time() - days * 86400
-        rows = await self._query(USAGE_MODEL, limit=USAGE_LIMIT)
+        rows = await self._query(USAGE_MODEL, limit=limit or USAGE_LIMIT)
         usage: List[Dict[str, Any]] = []
         for row in rows:
             ts = _to_ts(_get(row, "timestamp"))
@@ -1445,6 +1455,7 @@ class LedgerPlugin(MaiBotPlugin):
     def _adapt_official_peak(self, entry: Dict[str, Any], catalog: Dict[str, Any]) -> bool:
         """给已有条目补峰谷价（只补缺失项）；返回是否发生了修改。"""
 
+        changed = False
         if bool(entry.get("auto_adapted")):
             return False
         peak_values = (
@@ -1456,7 +1467,6 @@ class LedgerPlugin(MaiBotPlugin):
         has_window = bool(str(entry.get("peak_windows") or "").strip()) or bool(str(entry.get("peak_weekdays") or "").strip())
         if has_peak and has_window:
             return False
-        changed = False
         for field in ("peak_input_price", "peak_cache_input_price", "peak_output_price",
                       "peak_weekdays", "peak_windows", "peak_holiday_mode"):
             current = entry.get(field)
@@ -1506,6 +1516,7 @@ class LedgerPlugin(MaiBotPlugin):
             if self._adapt_official_peak(entry, catalog):
                 changed = True
         return changed
+
 
     @API(name="prices_rows", description="价格库页面数据（只含窗口内实际用过的模型）", version="1")
     async def prices_rows(self) -> List[Dict[str, Any]]:
@@ -1603,7 +1614,7 @@ class LedgerPlugin(MaiBotPlugin):
             )
         return rows
 
-    @API(name="price_save", description="保存单个模型价格（空字符串=保持不变）", version="1")
+    @API(name="price_save", description="保存单个模型价格（空字符串=保持不变；可传 orig_* 修正识别信息）", version="1")
     async def price_save(
         self,
         provider: str = "",
@@ -1922,6 +1933,395 @@ class LedgerPlugin(MaiBotPlugin):
 
     # ── 生命周期 ──
 
+    # ── 周报 / 月报（本地不可变记录）──
+
+    def _reports_dir(self) -> Path:
+        return Path(self.ctx.paths.data_dir) / REPORTS_DIR
+
+    def _daily_path(self) -> Path:
+        return Path(self.ctx.paths.data_dir) / DAILY_CACHE_FILE
+
+    def _load_daily(self) -> Dict[str, Any]:
+        try:
+            path = self._daily_path()
+            if not path.exists():
+                return {"days": {}}
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return {"days": {}}
+            if not isinstance(data.get("days"), dict):
+                data["days"] = {}
+            return data
+        except Exception:  # noqa: BLE001
+            return {"days": {}}
+
+    def _save_daily(self, data: Dict[str, Any]) -> None:
+        try:
+            path = self._daily_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(path)
+        except Exception:  # noqa: BLE001
+            return
+
+    async def _ingest_daily(self) -> Dict[str, Any]:
+        """把宿主 llm_usage 聚合为「日 / 聊天流 / 模型」的 token 计数。
+
+        性能策略：日聚合落盘并带 TTL，TTL 内直接复用（不发 RPC）；过期时只拉最近
+        ``INCREMENTAL_LIMIT`` 行做增量，仅替换被完整覆盖的整日，更早历史沿用缓存。
+        """
+
+        cached = self._load_daily()
+        coverage = cached.get("coverage") or {}
+        now = time.time()
+        try:
+            updated_ts = float(coverage.get("updated_ts") or 0.0)
+        except (TypeError, ValueError):
+            updated_ts = 0.0
+        if coverage.get("first") and now - updated_ts < DAILY_TTL_SECONDS:
+            return cached
+
+        have_cache = bool(coverage.get("first"))
+        limit = INCREMENTAL_LIMIT if have_cache else USAGE_LIMIT
+        try:
+            usage = await self._load_usage(DAILY_WINDOW_DAYS, limit=limit)
+            sessions = await self._session_map()
+        except Exception:  # noqa: BLE001
+            return cached
+
+        peak_cfg = self._peak()
+        fresh: Dict[str, Dict[str, Any]] = {}
+        touched: List[str] = []
+        for row in usage:
+            ts = float(row.get("ts") or 0)
+            if ts <= 0:
+                continue
+            day = datetime.fromtimestamp(ts, BEIJING).strftime("%Y-%m-%d")
+            if day not in fresh:
+                fresh[day] = {}
+                touched.append(day)
+            session_id = str(row.get("session_id") or "")
+            info = sessions.get(session_id) or {}
+            label = info.get("group") or ("后台（无会话）" if not session_id else f"会话 {session_id[:8]}")
+            scope = str(info.get("scope") or "")
+            s_key = session_id or "__background__"
+            model = str(row.get("model") or "(未知模型)")
+            provider = str(row.get("provider") or "")
+            m_key = f"{provider.lower()}::{model.lower()}"
+            entry = self._resolve_entry(model, provider) if model else None
+            peak = bool(_is_peak(peak_cfg, ts, entry))
+            chat = fresh[day].setdefault(s_key, {"label": label, "scope": scope, "models": {}})
+            slot = chat["models"].setdefault(
+                m_key,
+                {
+                    "model": model,
+                    "model_id": str(row.get("model_id") or ""),
+                    "provider": provider,
+                    "req_off": 0,
+                    "req_peak": 0,
+                    "hit_off": 0,
+                    "miss_off": 0,
+                    "out_off": 0,
+                    "hit_peak": 0,
+                    "miss_peak": 0,
+                    "out_peak": 0,
+                },
+            )
+            suffix = "peak" if peak else "off"
+            slot["req_" + suffix] += 1
+            slot["hit_" + suffix] += max(0, int(row.get("hit") or 0))
+            slot["miss_" + suffix] += max(0, int(row.get("miss") or 0))
+            slot["out_" + suffix] += max(0, int(row.get("out") or 0))
+
+        days: Dict[str, Dict[str, Any]] = {}
+        if have_cache:
+            for day_key, day_value in (cached.get("days") or {}).items():
+                days[day_key] = day_value
+        # 增量模式下，窗口被截断的最早一天可能不完整：保留缓存旧值，不替换。
+        skip_day = ""
+        if have_cache and touched and len(usage) >= limit:
+            skip_day = min(touched)
+        for day in touched:
+            if day == skip_day:
+                continue
+            days[day] = fresh[day]
+
+        all_days = sorted(days.keys())
+        data = {
+            "coverage": {
+                "first": all_days[0] if all_days else str(coverage.get("first") or ""),
+                "last": all_days[-1] if all_days else str(coverage.get("last") or ""),
+                "rows": sum(
+                    int(slot.get("req_off") or 0) + int(slot.get("req_peak") or 0)
+                    for chats in days.values()
+                    for chat in chats.values()
+                    for slot in (chat.get("models") or {}).values()
+                ),
+                "updated_at": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M:%S"),
+                "updated_ts": now,
+            },
+            "days": days,
+        }
+        self._save_daily(data)
+        return data
+
+    def _slot_cost(self, slot: Dict[str, Any]) -> float:
+        entry = self._resolve_entry(str(slot.get("model") or ""), str(slot.get("provider") or ""))
+        if entry is None:
+            return 0.0
+        cost = self._recompute(
+            entry, 0.0,
+            int(slot.get("hit_off") or 0), int(slot.get("miss_off") or 0), int(slot.get("out_off") or 0),
+            False, requests=int(slot.get("req_off") or 0),
+        )
+        cost += self._recompute(
+            entry, 0.0,
+            int(slot.get("hit_peak") or 0), int(slot.get("miss_peak") or 0), int(slot.get("out_peak") or 0),
+            True, requests=int(slot.get("req_peak") or 0),
+        )
+        return cost
+
+    @staticmethod
+    def _slot_tokens(slot: Dict[str, Any]) -> Tuple[int, int, int, int]:
+        hit = int(slot.get("hit_off") or 0) + int(slot.get("hit_peak") or 0)
+        miss = int(slot.get("miss_off") or 0) + int(slot.get("miss_peak") or 0)
+        out = int(slot.get("out_off") or 0) + int(slot.get("out_peak") or 0)
+        return hit, miss, out, hit + miss + out
+
+    def _period_candidates(self, kind: str, first: "date", last: "date") -> List[Tuple[str, "date", "date"]]:
+        """列出「已结束」且与覆盖区间有交集的周期（周一为周首，自然月为月）。"""
+
+        today = datetime.now(BEIJING).date()
+        out: List[Tuple[str, "date", "date"]] = []
+        if kind == "weekly":
+            start = first - timedelta(days=first.weekday())
+            while start + timedelta(days=6) < today:
+                end = start + timedelta(days=6)
+                if end >= first and start <= last:
+                    out.append((start.strftime("%G-W%V"), start, end))
+                start = end + timedelta(days=1)
+        else:
+            year, month = first.year, first.month
+            while True:
+                start = date(year, month, 1)
+                nxt = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+                end = nxt - timedelta(days=1)
+                if end >= today:
+                    break
+                if end >= first and start <= last:
+                    out.append((start.strftime("%Y-%m"), start, end))
+                year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+        return out
+
+    def _build_period_report(
+        self,
+        kind: str,
+        period_id: str,
+        start: "date",
+        end: "date",
+        daily: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        days = daily.get("days") or {}
+        start_key = start.isoformat()
+        end_key = end.isoformat()
+        chats: Dict[str, Dict[str, Any]] = {}
+        models: Dict[str, Dict[str, Any]] = {}
+        series: Dict[str, Dict[str, Any]] = {}
+        used: Dict[str, Dict[str, Any]] = {}
+        totals = {
+            "cost": 0.0,
+            "requests": 0,
+            "tokens": 0,
+            "prompt_tokens": 0,
+            "output_tokens": 0,
+            "hit_tokens": 0,
+            "peak_requests": 0,
+            "unknown_requests": 0,
+        }
+        for day in sorted(days.keys()):
+            if day < start_key or day > end_key:
+                continue
+            day_cost = 0.0
+            day_requests = 0
+            day_tokens = 0
+            for s_key, chat in days[day].items():
+                chat_key = s_key
+                chat_row = chats.setdefault(
+                    chat_key,
+                    {"key": chat_key, "label": str(chat.get("label") or "未知会话"), "scope": str(chat.get("scope") or ""),
+                     "cost": 0.0, "requests": 0, "tokens": 0, "models": set()},
+                )
+                for m_key, slot in (chat.get("models") or {}).items():
+                    model_name = str(slot.get("model") or "(未知模型)")
+                    provider = str(slot.get("provider") or "")
+                    cost = self._slot_cost(slot)
+                    hit, miss, out, tokens = self._slot_tokens(slot)
+                    requests = int(slot.get("req_off") or 0) + int(slot.get("req_peak") or 0)
+                    if self._resolve_entry(model_name, provider) is None:
+                        totals["unknown_requests"] += requests
+                    else:
+                        entry = self._resolve_entry(model_name, provider)
+                        if entry is not None:
+                            used[f"{provider.lower()}::{model_name.lower()}"] = self._entry_to_dict(entry)
+                    model_row = models.setdefault(
+                        f"{provider.lower()}::{model_name.lower()}",
+                        {"key": f"{provider.lower()}::{model_name.lower()}", "model": model_name,
+                         "model_id": str(slot.get("model_id") or ""), "provider": provider,
+                         "cost": 0.0, "requests": 0, "tokens": 0, "prompt_tokens": 0, "output_tokens": 0},
+                    )
+                    for target in (chat_row, model_row):
+                        target["cost"] += cost
+                        target["requests"] += requests
+                        target["tokens"] += tokens
+                        target["prompt_tokens"] = target.get("prompt_tokens", 0) + hit + miss
+                        target["output_tokens"] = target.get("output_tokens", 0) + out
+                    chat_row["models"].add(model_name)
+                    totals["cost"] += cost
+                    totals["requests"] += requests
+                    totals["tokens"] += tokens
+                    totals["prompt_tokens"] += hit + miss
+                    totals["output_tokens"] += out
+                    totals["hit_tokens"] += hit
+                    totals["peak_requests"] += int(slot.get("req_peak") or 0)
+                    day_cost += cost
+                    day_requests += requests
+                    day_tokens += tokens
+            if day_requests:
+                series[day] = {"date": day, "cost": _round_money(day_cost), "requests": day_requests, "tokens": day_tokens}
+
+        prompt_total = totals["prompt_tokens"]
+        overview = {
+            "cost": _round_money(totals["cost"]),
+            "requests": totals["requests"],
+            "tokens": totals["tokens"],
+            "prompt_tokens": prompt_total,
+            "output_tokens": totals["output_tokens"],
+            "cache_hit_ratio": _round_ratio(totals["hit_tokens"] / prompt_total) if prompt_total else 0.0,
+            "peak_ratio": _round_ratio(totals["peak_requests"] / totals["requests"]) if totals["requests"] else 0.0,
+            "chats_count": len(chats),
+            "models_count": len(models),
+            "unknown_requests": totals["unknown_requests"],
+        }
+        chat_rows = []
+        for row in chats.values():
+            row = dict(row)
+            row["models"] = len(row.get("models") or [])
+            chat_rows.append(row)
+        chat_rows.sort(key=lambda item: item.get("cost") or 0.0, reverse=True)
+        model_rows = sorted(models.values(), key=lambda item: item.get("cost") or 0.0, reverse=True)
+        return {
+            "kind": kind,
+            "period": period_id,
+            "label": f"{start.isoformat()} ~ {end.isoformat()}",
+            "start": start_key,
+            "end": end_key,
+            "generated_at": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M:%S"),
+            "price_snapshot": list(used.values()),
+            "overview": overview,
+            "by_chat": chat_rows,
+            "by_model": model_rows,
+            "by_day": list(series.values()),
+        }
+
+    def _report_path(self, kind: str, period_id: str) -> Path:
+        return self._reports_dir() / kind / f"{period_id}.json"
+
+    def _load_report(self, kind: str, period_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            path = self._report_path(kind, period_id)
+            if not path.exists():
+                return None
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _list_reports(self, kind: str) -> List[Dict[str, Any]]:
+        folder = self._reports_dir() / kind
+        if not folder.exists():
+            return []
+        rows: List[Dict[str, Any]] = []
+        for path in folder.glob("*.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                continue
+            overview = data.get("overview") or {}
+            rows.append(
+                {
+                    "period": str(data.get("period") or path.stem),
+                    "label": str(data.get("label") or ""),
+                    "start": str(data.get("start") or ""),
+                    "end": str(data.get("end") or ""),
+                    "cost": _round_money(float(overview.get("cost") or 0.0)),
+                    "requests": int(overview.get("requests") or 0),
+                    "tokens": int(overview.get("tokens") or 0),
+                    "generated_at": str(data.get("generated_at") or ""),
+                }
+            )
+        rows.sort(key=lambda item: item["period"], reverse=True)
+        return rows
+
+    async def _ensure_reports(self) -> None:
+        """装载后自动补历史：聚合日计数 → 生成尚未存在的周报/月报（已存在不覆盖）。"""
+
+        try:
+            daily = await self._ingest_daily()
+            coverage = daily.get("coverage") or {}
+            first = str(coverage.get("first") or "")
+            last = str(coverage.get("last") or "")
+            if not first or not last:
+                return
+            first_date = date.fromisoformat(first)
+            last_date = date.fromisoformat(last)
+            self._reports_dir().mkdir(parents=True, exist_ok=True)
+            for kind in ("weekly", "monthly"):
+                (self._reports_dir() / kind).mkdir(parents=True, exist_ok=True)
+                for period_id, start, end in self._period_candidates(kind, first_date, last_date):
+                    path = self._report_path(kind, period_id)
+                    if path.exists():
+                        continue
+                    report = self._build_period_report(kind, period_id, start, end, daily)
+                    if int((report.get("overview") or {}).get("requests") or 0) <= 0:
+                        continue
+                    tmp = path.with_name(path.name + ".tmp")
+                    tmp.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+                    tmp.replace(path)
+                    self._snapshot_cache = {}
+        except Exception:  # noqa: BLE001
+            return
+
+    @API(name="reports_snapshot", description="周报/月报：周期列表 + 最近一期明细", version="1")
+    async def reports_snapshot(self, kind: str = "weekly") -> Dict[str, Any]:
+        kind_key = "monthly" if str(kind or "").strip().lower().startswith("m") else "weekly"
+        cache = getattr(self, "_snapshot_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._snapshot_cache = cache
+        cached_payload = cache.get(kind_key)
+        if isinstance(cached_payload, tuple) and time.time() - cached_payload[0] < SNAPSHOT_TTL_SECONDS:
+            return cached_payload[1]
+        periods = self._list_reports(kind_key)
+        latest = self._load_report(kind_key, periods[0]["period"]) if periods else None
+        coverage = self._load_daily().get("coverage") or {}
+        payload = {
+            "kind": kind_key,
+            "periods": periods,
+            "latest": latest,
+            "coverage": coverage,
+            "rule": "周一为一周起点，自然月为一个月；周期结束后首次生成，生成后不再改动。",
+        }
+        cache[kind_key] = (time.time(), payload)
+        return payload
+
+    @API(name="report_detail", description="周报/月报：指定周期明细", version="1")
+    async def report_detail(self, kind: str = "weekly", period: str = "") -> Dict[str, Any]:
+        kind_key = "monthly" if str(kind or "").strip().lower().startswith("m") else "weekly"
+        period_key = str(period or "").strip()
+        report = self._load_report(kind_key, period_key) if period_key else None
+        return {"kind": kind_key, "period": period_key, "report": report}
+
     async def on_load(self) -> None:
         """加载时恢复上次计算结果（页面先显示旧数据），并在后台预热。"""
 
@@ -1933,6 +2333,7 @@ class LedgerPlugin(MaiBotPlugin):
             self._load_report_cache()
             self._schedule_refresh(7)
             self._schedule_refresh(30)
+            self._reports_task = asyncio.create_task(self._ensure_reports())
         except Exception:  # noqa: BLE001
             pass
 

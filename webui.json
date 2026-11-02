@@ -514,6 +514,42 @@
       "mode": "custom",
       "entry": "webui/prices.html",
       "layout": "document"
+    },
+    {
+      "id": "reports",
+      "title": "周报 / 月报",
+      "description": "周期结束自动生成的不可变记录：按聊天流、按模型、按日汇总，柱状图展示。",
+      "placement": "workspace",
+      "icon": "chart",
+      "mode": "custom",
+      "entry": "webui/reports.html",
+      "layout": "document",
+      "queries": {
+        "snapshot": {
+          "api": "reports_snapshot",
+          "version": "1",
+          "parameters": {
+            "kind": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "detail": {
+          "api": "report_detail",
+          "version": "1",
+          "parameters": {
+            "kind": {
+              "type": "string",
+              "required": true
+            },
+            "period": {
+              "type": "string",
+              "required": true
+            }
+          }
+        }
+      }
     }
   ]
 }
